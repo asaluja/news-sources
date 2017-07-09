@@ -9,7 +9,8 @@ import re
 import numpy as np
 import pandas as pd
 
-SUBJ_THRESHOLD = 100000000
+SUBJ_THRESHOLD = 90000000
+np.random.seed(42)
 
 def process_textfile(filehandle):
 	records = []
@@ -107,57 +108,60 @@ def compute_participant_histograms(filename, news_sources, word_counts):
 	plt.show()
 
 
-def sample_news_sources(news_sources, word_counts, words_to_sample):
+def sample_news_sources(news_sources, word_counts, ns_mapping, words_to_sample):
 	words_sampled = 0
-	sampled_sources = []
-	while words_sampled < words_to_sample:
-		sampled_source = np.random.choice(news_sources, replace=False)
-		words_sampled += word_counts[sampled_source]
-		sampled_sources.append(sampled_source)
+	sampled_sources = []	
+	while words_sampled < words_to_sample:				
+		random_idx = np.random.choice(range(len(news_sources)))
+		sampled_source = news_sources[random_idx]
+		news_sources = np.delete(news_sources, random_idx) # need to also remove from news_sources so that we don't sample again
+		words_sampled += word_counts[sampled_source]		
+		sampled_sources.extend(list(ns_mapping[sampled_source]))			
 	return sampled_sources, words_sampled
 
 
-def select_corpora(subj_filename, word_counts):
+def select_corpora(subj_filename, word_counts, ns_mapping):
 	all_ratings = pd.read_csv(subj_filename, sep='\t').to_dict(orient='records')	
 	participant_corpora = {}
-	for idx, subj_rating in enumerate(all_ratings): # here: dict of news source --> rating				
+	for idx, subj_rating in enumerate(all_ratings): # here: dict of news source --> rating						
 		acc_sources = []
 		ratings_by_group = []		
 		for desired_rating in range(1, 4):
 			ratings_by_group.append([ns for ns, rating in subj_rating.items() if rating == desired_rating])			
-		total_words = 0
-		for news_sources in reversed(ratings_by_group):
-			if news_sources:
-				num_words = sum(word_counts.get(source, 0) for source in news_sources)
+		total_words = 0		
+		for news_sources in reversed(ratings_by_group):			
+			if news_sources:				
+				num_words = sum(word_counts.get(source, 0) for source in news_sources)				
 				if total_words + num_words < SUBJ_THRESHOLD:
-					acc_sources.extend(news_sources)
+					all_sources = []
+					for source in news_sources:
+						all_sources.extend(list(ns_mapping[source]))
+					acc_sources.extend(all_sources)					
 					total_words += num_words
-				else: # then we need to sample
-					sampled_sources, sampled_words = sample_news_sources(news_sources, word_counts, SUBJ_THRESHOLD - total_words)
+				else: # then we need to sample					
+					sampled_sources, sampled_words = sample_news_sources(news_sources, word_counts, ns_mapping, SUBJ_THRESHOLD - total_words)
 					acc_sources.extend(sampled_sources)
 					total_words += sampled_words
-					break
+					break				
 			else:
 				continue
 		if total_words < SUBJ_THRESHOLD:
 			print("Number of words for subject %d above rating 0: %d; rejecting..." % (idx, total_words))
 		else:
-			participant_corpora[idx] = (acc_sources, total_words)
+			participant_corpora[idx] = (acc_sources, total_words)			
 	return participant_corpora
 
 def output_participant_corpora(output_dir, text_df, metadata_df, entities, subject_corpora):
-	for idx, corpora_num_words in subject_corpora.items():
-		if idx != 15:
-			continue
-		corpora, num_words = corpora_num_words
+	for idx, corpora_num_words in subject_corpora.items():			
+		corpora, num_words = corpora_num_words			
 		out_filename = output_dir + '/%d.txt' % idx
 		with io.open(out_filename, 'wb') as output_fh:
 			filtered_metadata = metadata_df[metadata_df['source'].isin(corpora)]			
-			source_text = filtered_metadata.merge(text_df, on='article_id', suffixes=('_meta', '_text'))['text']
-			source_text_clean = source_text.apply(lambda x: clean_text(x, entities))	
-			for article in source_text_clean.values:
+			source_text = filtered_metadata.merge(text_df, on='article_id', suffixes=('_meta', '_text'))
+			#source_text['num_words_check'] = source_text['text_clean'].apply(lambda x: len(x.split()))			
+			for article in source_text['text_clean'].values:
 				output_fh.write("%s\n" % article)
-			print("Subject %d: wrote %d words across %d articles to %s" % (idx, num_words, len(source_text), out_filename))	
+			print("Subject %d: wrote %d words across %d articles to %s" % (idx, num_words, len(source_text), out_filename))				
 
 def main():
 	parser = argparse.ArgumentParser()
@@ -194,16 +198,16 @@ def main():
 	for source, count in word_counts_list:
 		word_counts[source] += count	
 	clean_word_counts = {}
-	for source_clean in news_sources:
+	for source_clean in news_sources:		
 		clean_word_counts[source_clean] = sum(word_counts[source] for source in news_sources[source_clean])	
 	print("Metadata and news source processing complete.")
 	entities_fh = io.open(args.entities, 'rb')
 	entities = set([line.strip().lower() for line in entities_fh.readlines()])
 	entities_fh.close()	
-	print("Finished reading and processing news sources and entities files.")
+	print("Finished reading and processing news sources and entities files.")	
 		
 	#compute_participant_histograms(args.subjects, news_sources, word_counts)
-	participant_corpora = select_corpora(args.subjects, clean_word_counts)				
+	participant_corpora = select_corpora(args.subjects, clean_word_counts, news_sources)					
 	text_fh = io.open(args.text, 'rb')
 	text_df = process_textfile(text_fh)
 	text_fh.close()	
